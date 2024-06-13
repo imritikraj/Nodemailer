@@ -7,15 +7,69 @@ const app = express();
 const Mail = require('./mail');
 const otpStorage = require('./otpStorage');
 var cookieParser = require('cookie-parser');
+const { generateAccessToken, verifyToken } = require('./jwt');
 
 app.use(express.json());
 app.set("view engine", "ejs");
 app.set("views", path.resolve("./views"));
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: false }));
-let db = [
-    { email: 'imritikraj0@gmail.com', password: '123456', name: 'Ritik Raj' },
-];
+let db = [];
+
+const setUserSession = (req, res, next) => {
+    const { email, name } = req.user;
+    res.cookie('isLoggedIn', 'true');
+    res.cookie('userEmail', email);
+    res.cookie('userName', name);
+    next();
+};
+
+
+
+
+app.route('/signup')
+    .get((req, res) => {
+        res.render('signup');
+    })
+    .post((req, res) => {
+        const { email, password, name } = req.body;
+        db.push({ email, password, name, isVerified: false });
+        let id = generateAccessToken({ name, email });
+        let mail = new Mail();
+        mail.setReceiver(email);
+        mail.setSubject("Email Verification");
+        mail.setHTML(`<a href="http://localhost:${PORT}/verify/${id}">Click here to verify your email</a>`);
+        mail.send()
+            .then((result) => {
+                res.render('verifyEmailLoading');
+            })
+            .catch((error) => {
+                console.log(error);
+                res.status(500).send("Internal Server Error");
+            });
+    });
+
+
+
+app.get('/verify/:id', (req, res, next) => {
+    const { id } = req.params;
+    let isVerified = verifyToken(id);
+    if (isVerified?.status) {
+        db = db.map(user => {
+            if (user.email === isVerified?.payload?.email) {
+                user.isVerified = true;
+                req.user = { email: user.email, name: user.name };
+            }
+            return user;
+        });
+        next();
+    } else {
+        res.redirect('/login');
+    }
+}, setUserSession, (req, res) => {
+    res.redirect('/');
+});
+
 
 let generateOTP = () => {
     return crypto.randomInt(100000, 999999);
@@ -23,11 +77,13 @@ let generateOTP = () => {
 
 app.get('/', (req, res) => {
     let cookie = req.cookies['isLoggedIn'] ? JSON.parse(req.cookies['isLoggedIn']) : null;
+    let userName = req.cookies['userName'];
     if (!cookie) {
         return res.redirect('/login');
     }
-    res.render('index');
+    res.render('index', { user_name: userName });
 });
+
 
 app.route('/login')
     .get((req, res) => {
@@ -45,7 +101,7 @@ app.route('/login')
             return res.status(401).send('Invalid credentials');
         }
     });
-    
+
 app.get('/logout', (req, res) => {
     res.clearCookie('isLoggedIn');
     res.redirect('/login');
@@ -90,9 +146,9 @@ app.post('/forgot-password', (req, res) => {
     }
 });
 
-setInterval(() => {
-    console.log(otpStorage.getAll())
-}, 10000)
+// setInterval(() => {
+//     console.log(otpStorage.getAll())
+// }, 10000)
 
 app.post('/verify-otp', (req, res) => {
     const { email, otp } = req.body;
